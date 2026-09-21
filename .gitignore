@@ -34,3 +34,8 @@ coverage/
 .vite/
 .turbo/
 *.tsbuildinfo
+
+# 本地 SQLite 与运行导出
+*.db
+*.db-journal
+fossil-court.db

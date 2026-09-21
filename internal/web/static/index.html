@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>化石带议庭</title>
+<style>
+  :root{--ink:#33291d;--muted:#7a6f58;--paper:#faf7f0;--line:#d8cdb8;
+    --green:#2f7d46;--amber:#d97a1f;--red:#b03030;--blue:#1f5fbf;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"PingFang SC","Hiragino Sans GB",Helvetica,Arial,sans-serif;
+    color:var(--ink);background:var(--paper);}
+  header{padding:14px 22px;border-bottom:2px solid var(--line);background:#f1ead9}
+  header h1{margin:0;font-size:22px}
+  header p{margin:4px 0 0;color:var(--muted);font-size:13px}
+  main{display:grid;grid-template-columns:300px 1fr;gap:16px;padding:16px 22px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px}
+  .panel h2{font-size:15px;margin:0 0 8px;border-left:4px solid #b89b5e;padding-left:8px}
+  table{border-collapse:collapse;width:100%;font-size:12px}
+  th,td{border:1px solid var(--line);padding:3px 6px;text-align:left;vertical-align:top}
+  th{background:#f4eee1}
+  .tag{display:inline-block;padding:0 6px;border-radius:10px;font-size:11px;margin-right:4px}
+  .t-present{background:#dff2e4;color:var(--green)}
+  .t-absent{background:#e7eefc;color:var(--blue)}
+  .t-insufficient{background:#f7ecd9;color:#9a6a1c}
+  .t-unsampled{background:#eee;color:#777}
+  .t-soft{background:#fbead6;color:var(--amber)}
+  .t-hard{background:#f8dede;color:var(--red)}
+  .t-rework{background:#fbe3cd;color:var(--amber)}
+  .t-conflict{background:#f8dede;color:var(--red);font-weight:bold}
+  input,select,button,textarea{font:inherit;font-size:12px;padding:4px 6px;margin:2px 0;
+    border:1px solid #c3b598;border-radius:4px;background:#fff}
+  button{cursor:pointer;background:#e9dcc0;padding:4px 10px}
+  button:hover{background:#ddcda8}
+  button.danger{background:#f0d3d3;border-color:#cf9b9b}
+  .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .muted{color:var(--muted);font-size:11px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  pre.chain{background:#2b2419;color:#f3e6c8;padding:8px;border-radius:6px;
+    font-size:11px;overflow-x:auto;white-space:pre-wrap;margin:6px 0}
+  .evid{font-size:11px;color:var(--muted)}
+  .scheme{margin-bottom:10px;padding:8px;border:1px dashed #cbb88f;border-radius:6px}
+  .scheme h3{margin:0 0 4px;font-size:13px}
+  .toast{position:fixed;right:20px;bottom:20px;max-width:420px;background:#2b2419;color:#fff;
+    padding:10px 14px;border-radius:8px;font-size:12px;display:none;white-space:pre-wrap;z-index:10}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:11px}
+  details summary{cursor:pointer;font-weight:600;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>化石带议庭</h1>
+  <p>多剖面化石分类单元对齐议事厅：保留缺失、重工与分类异议；以首现/末现/共存事件建立分带。深度向下增大。</p>
+</header>
+<main>
+  <div id="left"></div>
+  <div id="right"></div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+let STATE=null;
+const $=(s,el=document)=>el.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=d=>d===null||d===undefined?'—':(Math.round(d)===d?d.toFixed(0):String(d));
+const stateLabel={present:'正常产出',absent:'未见（充分采样负证据）',insufficient:'采样不足（不作负证据）',unsampled:'完全未采样'};
+function toast(msg,isErr){const t=$('#toast');t.textContent=msg;t.style.display='block';
+  t.style.background=isErr?'#6b2424':'#2b2419';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',6000);}
+async function api(path,opts){
+  const res=await fetch(path,opts);
+  const ct=res.headers.get('content-type')||'';
+  if(ct.includes('json')){const j=await res.json();if(!res.ok)throw Object.assign(new Error(j.error||res.statusText),j);return j;}
+  if(!res.ok)throw new Error(res.statusText);return null;
+}
+async function refresh(){STATE=await api('/api/state');render();}
+const post=(path,body)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+function taxName(id){const t=STATE.taxa.find(x=>x.id===id);return t?t.name:id;}
+function groupName(id){if(id.startsWith('~'))return taxName(id.slice(1));const g=STATE.groups.find(x=>x.id===id);return g?g.displayName:id;}
+function interpName(i){return i==='raw'?'原始(含重工)':'原位(剔重工)';}
+
+function render(){
+  renderLeft(); renderRight();
+}
+function renderLeft(){
+  const L=$('#left');L.innerHTML='';
+  // 剖面 + 采样层段 + 状态表
+  let p=panel('剖面深度与采样区间',()=>{
+    let h='<table><tr><th>剖面</th><th>采样层段(深度, 充分度)</th></tr>';
+    STATE.sections.forEach(sec=>{
+      const ivs=STATE.intervals.filter(i=>i.sectionId===sec.id)
+        .map(i=>`<div>${fmt(i.topDepth)}–${fmt(i.baseDepth)} ${i.sufficient?'<b>充分</b>':'<span class="tag t-insufficient">不足</span>'} <span class="muted">${esc(i.note)}</span></div>`).join('');
+      h+=`<tr><td><b>${esc(sec.name)}</b><br><span class="muted">${sec.id} / ${esc(sec.depthUnit)}</span></td><td>${ivs}</td></tr>`;
+    });
+    return h+'</table>';
+  });L.appendChild(p);
+
+  p=panel('产出状态（未见 ≠ 未采样）',()=>{
+    let h='<table><tr><th>剖面</th><th>分类单元</th><th>状态</th></tr>';
+    STATE.statuses.forEach(st=>{
+      h+=`<tr><td>${st.sectionId}</td><td>${esc(taxName(st.taxonId))}<div class="mono muted">${st.taxonId}</div></td>
+      <td><span class="tag t-${st.state}">${stateLabel[st.state]}</span><div class="evid">证据: ${st.evidence.join(', ')||'—'}</div></td></tr>`;
+    });
+    return h+'</table>';
+  });L.appendChild(p);
+
+  p=panel('异常产重工候选',()=>{
+    let h='<table><tr><th>产出</th><th>深度</th><th>当前</th><th>操作</th></tr>';
+    STATE.occurrences.filter(o=>o.status==='present').forEach(o=>{
+      const rw=STATE.reworkCandidates.find(r=>r.occurrenceId===o.id);
+      h+=`<tr><td>${o.sectionId} · ${o.taxonId}<div class="muted">${o.id}</div></td><td>${fmt(o.depth)}</td>
+      <td>${rw&&rw.marked?'<span class="tag t-rework">重工候选</span>':'正常'}</td>
+      <td class="row">${rw&&rw.marked
+        ?`<button onclick="setRework('${o.id}',false)">撤销重工</button>`
+        :`<button onclick="setRework('${o.id}',true)">列为重工候选</button>`}</td></tr>`;
+    });
+    return h+'</table>';
+  });L.appendChild(p);
+
+  // 等义关系
+  p=panel('版本化等义关系',()=>{
+    let h='<div class="grid2"><input id="gid" placeholder="组ID(可空自动)"><input id="gname" placeholder="显示名，如 三叶虫等义组"></div>';
+    h+='<div>'+STATE.taxa.map(t=>`<label class="mono" style="margin-right:8px"><input type="checkbox" class="mx" value="${t.id}">${t.id}</label>`).join('')+'</div>';
+    h+=`<div class="row"><button onclick="merge()">建立/更新合并</button></div>`;
+    h+='<table style="margin-top:6px"><tr><th>组</th><th>成员</th><th>版本</th><th></th></tr>';
+    STATE.groups.forEach(g=>{
+      h+=`<tr><td>${esc(g.displayName)}<div class="mono muted">${g.id}</div></td>
+      <td class="mono">${g.members.join(', ')}</td><td>v${g.version}</td>
+      <td><button class="danger" onclick="splitGroup('${g.id}')">拆分</button></td></tr>`;
+    });
+    h+='</table>';
+    h+='<details style="margin-top:6px"><summary>等义关系版本史</summary><table><tr><th>v</th><th>动作</th><th>组</th><th>成员</th></tr>';
+    STATE.synVersions.forEach(v=>{
+      h+=`<tr><td>${v.version}</td><td>${v.kind}</td><td class="mono">${v.groupId}</td><td class="mono">${(v.members||[]).join(',')}</td></tr>`;
+    });
+    return h+'</table></details>';
+  });L.appendChild(p);
+
+  // 锦标
+  p=panel('层位锦标（锁定等时对）',()=>{
+    const secOpts=STATE.sections.map(s=>`<option value="${s.id}">${s.id}</option>`).join('');
+    const grOpts=()=>horizonGroupOptions();
+    let h=`<div class="grid2">
+      <select id="ta-g">${grOpts()}</select><select id="ta-s">${secOpts}</select>
+      <select id="ta-k"><option>FAD</option><option>LAD</option></select></div>
+      <div class="muted">≡</div>
+      <div class="grid2">
+      <select id="tb-g">${grOpts()}</select><select id="tb-s">${secOpts}</select>
+      <select id="tb-k"><option>FAD</option><option>LAD</option></select></div>
+      <input id="tnote" placeholder="锦标备注" style="width:100%">
+      <button onclick="addTie()">锁定锦标</button>`;
+    h+='<table style="margin-top:6px"><tr><th>锦标</th><th>端点</th><th>状态</th><th></th></tr>';
+    STATE.ties.forEach(t=>{
+      h+=`<tr><td class="mono">${t.id}</td><td class="mono">${t.aGroup}#${t.aKind}@${t.aSection} ≡ ${t.bGroup}#${t.bKind}@${t.bSection}
+        <div class="muted">${esc(t.note)}</div>${t.resolvable?'':'<div class="tag t-insufficient">端点未解析</div>'}</td>
+      <td>${t.active?'':'<span class="tag t-unsampled">已停用</span>'}${t.conflicted?'<span class="tag t-conflict">成环</span>':''}</td>
+      <td>${t.active?`<button class="danger" onclick="dropTie('${t.id}')">人工停用</button>`:''}</td></tr>`;
+    });
+    return h+'</table>';
+  });L.appendChild(p);
+
+  p=panel('数据与重放',()=>{
+    return `<div class="row">
+      <a href="/api/export"><button>导出运行记录(JSON)</button></a>
+      <button onclick="resetDB()">清空并重灌 fixture</button></div>
+      <label class="muted">或选择此前导出的 JSON 重新导入：</label>
+      <input type="file" id="imp" accept="application/json">
+      <button onclick="importFile()">导入复核</button>
+      <div style="margin-top:8px"><img src="/svg/sections" alt="剖面 SVG" style="width:100%;border:1px solid var(--line);border-radius:6px"/></div>`;
+  });L.appendChild(p);
+}
+function horizonGroupOptions(){
+  const gs=[...new Set(STATE.horizons.map(h=>h.groupId))].sort();
+  return gs.map(g=>`<option value="${esc(g)}">${esc(groupName(g))} [${g}]</option>`).join('');
+}
+function panel(title,fn){const d=document.createElement('div');d.className='panel';
+  d.innerHTML=`<h2>${title}</h2>`+fn();return d;}
+function renderRight(){
+  const R=$('#right');R.innerHTML='';
+  let p=panel('事件候选（双解释：原始口径 / 原位口径）',()=>{
+    let h='<table><tr><th>解释</th><th>事件</th><th>剖面</th><th>深度</th><th>修订</th><th>依赖证据</th></tr>';
+    STATE.events.slice().sort((a,b)=>a.id<b.id?-1:1).forEach(ev=>{
+      const partner=ev.partnerGroup?` +${groupName(ev.partnerGroup)}`:'';
+      const evs=ev.evidence.map(e=>{
+        const ref=e.occurrenceId||e.intervalId||'';
+        return `<div>· ${esc(e.role)} ${ref?`<span class="mono">${ref}</span>`:''}：${esc(e.note)}</div>`;
+      }).join('');
+      h+=`<tr><td>${interpName(ev.interpretation)}</td>
+      <td>${ev.kind} <b>${esc(groupName(ev.groupId))}</b>${partner}<div class="mono muted">${ev.groupId}</div></td>
+      <td>${ev.sectionId}</td><td>${fmt(ev.depth)}</td><td>r${ev.revision}</td>
+      <td class="evid">${evs}<div class="muted">依赖产出: ${ev.dependsOn.join(', ')}</div></td></tr>`;
+    });
+    return h+'</table>';
+  });R.appendChild(p);
+
+  p=panel('分带方案与软/硬约束',()=>{
+    return STATE.schemes.map(sc=>{
+      const viol=(sc.violations||[]).map(v=>
+        `<div><span class="tag t-${v.severity}">${v.severity==='hard'?'硬':'软'}·${v.code}</span>${esc(v.message)}</div>`).join('')||'<div class="muted">无违反</div>';
+      let chain='';
+      if(sc.conflictChain&&sc.conflictChain.length){
+        chain='<pre class="chain">'+sc.conflictChain.map((s,i)=>`${i+1}. [${s.edge}${s.tieId?' '+s.tieId:''}] ${s.from}  →  ${s.to}\n    ${esc(s.detail)}`).join('\n')+'</pre>';
+      }
+      const zones=(sc.zones||[]).map(z=>`<li>${esc(z.name)} ${sc.scope==='per-section'?`[${fmt(z.top)}~${fmt(z.base)}]`:''}</li>`).join('')||'<li class="muted">（成环时不出全球带，保留冲突链）</li>';
+      return `<div class="scheme"><h3>${esc(sc.title)} ${sc.conflictChain&&sc.conflictChain.length?'<span class="tag t-conflict">锦标成环</span>':''}</h3>
+        <div class="muted">${sc.scope==='global'?'跨剖面对锦标齐':'单剖面事件分带'} · ${sc.interpretation}</div>
+        <ul style="margin:4px 0">${zones}</ul>${chain}<div class="evid">${viol}</div></div>`;
+    }).join('');
+  });R.appendChild(p);
+
+  p=panel('重算日志（只重算依赖事件）',()=>{
+    let h='<table><tr><th>#</th><th>时间</th><th>原因</th><th>范围</th><th>重算</th><th>保留</th><th>明细</th></tr>';
+    STATE.recomputeLog.forEach(l=>{
+      h+=`<tr><td>${l.id}</td><td class="mono">${l.at}</td><td>${esc(l.cause)}</td>
+      <td class="mono">${esc(l.scope)}</td><td>${l.recomputed}</td><td>${l.preserved}</td>
+      <td class="mono muted">${esc(l.detail)}</td></tr>`;
+    });
+    return h+'</table>';
+  });R.appendChild(p);
+}
+
+async function setRework(id,marked){
+  try{const note=marked?(prompt('重工候选备注（可空）','异常高位产出，疑似再搬运')||''):'';
+    const st=await post('/api/rework',{occurrenceId:id,marked,note});
+    STATE=st;render();toast(marked?'已列为重工候选：raw/in_situ 两解释并列，不按最值硬定':'已撤销重工标记');
+  }catch(e){toast(e.message,true);}
+}
+async function merge(){
+  const members=[...document.querySelectorAll('.mx:checked')].map(x=>x.value);
+  const displayName=$('#gname').value.trim();
+  if(members.length<2)return toast('请勾选至少两个分类单元',true);
+  try{const st=await post('/api/syn/merge',{groupId:$('#gid').value.trim()||undefined,
+      displayName:displayName||('等义组 '+members.join('+')),members,note:'页面建立'});
+    STATE=st;render();toast('等义关系已建立新版本，仅相关事件重算');
+  }catch(e){toast(e.message,true);}
+}
+async function splitGroup(id){
+  if(!confirm('拆分等义组 '+id+'？将记录 split 版本，只重算该组及其共存事件。'))return;
+  try{const st=await post('/api/syn/split',{groupId:id,note:'页面拆分'});
+    STATE=st;render();toast('已拆分并记录版本');}catch(e){toast(e.message,true);}
+}
+async function addTie(){
+  const body={aGroup:v('ta-g'),aSection:v('ta-s'),aKind:v('ta-k'),
+    bGroup:v('tb-g'),bSection:v('tb-s'),bKind:v('tb-k'),note:$('#tnote').value};
+  try{const st=await post('/api/ties',body);STATE=st;render();toast('锦标已锁定');}
+  catch(e){
+    if(e.conflict){
+      let msg='检测到成环，锦标已保留（未删除任何锦标）：\n冲突链：\n'+
+        e.conflictChain.map((s,i)=>`${i+1}. [${s.edge}${s.tieId?' '+s.tieId:''}] ${s.from} → ${s.to}`).join('\n');
+      toast(msg);
+    }else toast(e.message,true);
+    await refresh();
+  }
+}
+function v(id){return document.getElementById(id).value;}
+async function dropTie(id){
+  if(!confirm('人工停用锦标 '+id+'？（数据保留，仅停用）'))return;
+  const st=await post(`/api/ties/${id}/deactivate`,{});STATE=st;render();toast('锦标已人工停用');
+}
+async function resetDB(){
+  if(!confirm('清空数据库并重灌固定 fixture？'))return;
+  const st=await post('/api/reset',{});STATE=st;render();toast('已清空并重新导入固定 fixture');
+}
+async function importFile(){
+  const f=$('#imp').files[0];if(!f)return toast('请选择 JSON 文件',true);
+  const text=await f.text();
+  try{
+    const res=await fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:text});
+    const j=await res.json();if(!res.ok)throw new Error(j.error);
+    STATE=j;render();toast('导入完成，可对照复核事件与分带');
+  }catch(e){toast(e.message,true);}
+}
+refresh().catch(e=>toast(e.message,true));
+</script>
+</body></html>
